@@ -37,52 +37,55 @@ uniform mat4 uView;         // 视图矩阵
 uniform mat4 uProj;         // 新增：投影矩阵（视空间裁剪必备）
 
 void main() {
-    // 基础颜色 + 环境光
+    // 基础颜色 + 环境光 → 提高亮度
     vec3 baseColor = vec3(0.82, 0.82, 0.8);
-    vec3 finalColor = baseColor * 0.12; // 环境光
+    vec3 finalColor = baseColor * 0.3; // 环境光变亮
 
-    // 表面法线（示例：平面朝上，可替换为GBuffer法线）
+    // 表面法线（世界空间）
     vec3 N = normalize(vec3(0.0, 1.0, 0.0));
+    vec3 N_view = normalize(mat3(uView) * N);
 
-    // 1. 计算当前片元所属的分块（16x16像素为一个分块）
+    // 预计算片元视空间坐标
+    vec3 fragVS = (uView * vec4(posWS, 1.0)).xyz;
+
+    // 1. 计算分块索引
     ivec2 tileXY = ivec2(gl_FragCoord.xy) / 16;
-    // 分块总数量
-    int tileCountX = uScreenSize.x / 16;
-    // 分块线性索引
+    int tileCountX = (uScreenSize.x + 15) / 16;
     uint tileIndex = uint(tileXY.y) * uint(tileCountX) + uint(tileXY.x);
+
+    if (tileIndex >= lists.length()) {
+        fragColor = vec4(finalColor, 1.0);
+        return;
+    }
 
     // 2. 获取当前分块的光源列表
     TileLightList lightList = lists[tileIndex];
 
     // 3. 遍历分块内的有效光源
-    for (int i = 0; i < lightList.count; ++i) {
-        // 获取光源索引 + 光源数据
+    for (int i = 0; i < min(lightList.count, 64); ++i) {
         int lightID = lightList.indices[i];
-        Light light = lights[lightID];
+        if (lightID < 0 || lightID >= MAX_LIGHTS) continue;
 
-        // -------------------------- 核心优化：视空间直接计算 --------------------------
-        // 原代码：视空间→世界空间 计算距离，性能低
-        // 优化后：片元世界坐标 → 视空间坐标，直接和光源视空间坐标计算距离
-        vec3 fragVS = (uView * vec4(posWS, 1.0)).xyz;
+        Light light = lights[lightID];
         vec3 lightVS = light.posVS.xyz;
 
-        // 光照方向 + 距离（视空间直接计算，无逆矩阵开销）
         vec3 L = lightVS - fragVS;
         float dist = length(L);
 
-        // 超出光照半径，跳过
-        if (dist > light.radius) continue;
+        if (dist > light.radius || dist < 0.01) continue;
+        L /= dist;
 
-        // 法线·光线方向 漫反射计算
-        float NdotL = max(dot(N, L / dist), 0.0);
+        float NdotL = max(dot(N_view, L), 0.0);
 
-        // 光照衰减：平滑衰减公式（比原线性衰减更自然）
+        // 软衰减，范围大
         float attenuation = 1.0 - smoothstep(0.0, light.radius, dist);
-        attenuation *= attenuation;
 
-        // 光照叠加
+        // 亮度正常 → 不暗、不爆
         finalColor += baseColor * light.color.rgb * NdotL * attenuation * 0.5;
     }
+
+    // 去掉压暗的色调映射！！！这就是你变暗的元凶
+    // finalColor = finalColor / (finalColor + 0.8);
 
     // 最终颜色输出
     fragColor = vec4(finalColor, 1.0);
