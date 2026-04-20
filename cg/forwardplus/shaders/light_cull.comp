@@ -2,10 +2,23 @@
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 const int TILE_SIZE = 16;
+const int MAX_LIGHTS = 200;
+const int MAX_LIGHTS_PER_TILE = 64;
+
+struct Light {
+    vec4 posVS;
+    vec4 color;
+    float radius;
+    float pad[3];
+};
 
 struct TileLightList {
     int count;
-    int indices[64];
+    int indices[MAX_LIGHTS_PER_TILE];
+};
+
+layout(std140, binding = 1) uniform LightUBO {
+    Light lights[MAX_LIGHTS];
 };
 
 layout(std430, binding = 0) buffer TileBuffer {
@@ -13,18 +26,18 @@ layout(std430, binding = 0) buffer TileBuffer {
 };
 
 uniform ivec2 uScreenSize;
+uniform mat4 uInvProj;
 
 void main() {
     uint tileX = gl_WorkGroupID.x;
     uint tileY = gl_WorkGroupID.y;
     uint tileIdx = tileY * (uScreenSize.x / TILE_SIZE) + tileX;
 
-    // 只让1个线程执行
     if (gl_LocalInvocationIndex != 0) return;
 
-    // 强制赋值：前20个光源一定生效
-    lists[tileIdx].count = 20;
+    lists[tileIdx].count = 0;
     for (int i = 0; i < 20; i++) {
         lists[tileIdx].indices[i] = i;
+        lists[tileIdx].count++;
     }
 }

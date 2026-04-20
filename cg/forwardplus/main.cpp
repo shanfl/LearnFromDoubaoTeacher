@@ -12,8 +12,8 @@ using namespace glm;
 using namespace std;
 
 const int TILE_SIZE = 16;
-const int MAX_LIGHTS = 1024;
-const int MAX_LIGHTS_PER_TILE = 256;
+const int MAX_LIGHTS = 200;
+const int MAX_LIGHTS_PER_TILE = 64;
 
 struct Light {
     vec4 posWS;
@@ -89,12 +89,13 @@ int main() {
 
     const int winW = 1280;
     const int winH = 720;
-    GLFWwindow* window = glfwCreateWindow(winW, winH, "Forward+", NULL, NULL);
+    GLFWwindow* window = glfwCreateWindow(winW, winH, "Forward+ 3D Light Culling", NULL, NULL);
     glfwMakeContextCurrent(window);
     gladLoadGLLoader((GLADloadproc)glfwGetProcAddress);
     glViewport(0, 0, winW, winH);
     glEnable(GL_DEPTH_TEST);
 
+    // 深度纹理
     GLuint depthTex;
     glGenTextures(1, &depthTex);
     glBindTexture(GL_TEXTURE_2D, depthTex);
@@ -109,30 +110,25 @@ int main() {
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, tileSSBO);
     glBufferData(GL_SHADER_STORAGE_BUFFER, tilesX * tilesY * sizeof(TileLightList), nullptr, GL_DYNAMIC_DRAW);
 
-    vector<Light> lights(200);
-    //for (int i = 0; i < 200; i++) {
-    //    // 放在立方体上方，高度 5
-    //    lights[i].posWS = vec4(rand() % 60 - 30, 5.0f, rand() % 60 - 30, 1);
-    //    // 纯白色强光
-    //    lights[i].color = vec4(2.0f, 2.0f, 2.0f, 1.0f);
-    //    // 超大照射范围
-    //    lights[i].radius = 30.0f;
-    //}
-
-    for (int i = 0; i < 200; i++) {
+    // 光源（世界空间）
+    vector<Light> lights(MAX_LIGHTS);
+    for (int i = 0; i < MAX_LIGHTS; i++) {
         lights[i].posWS = vec4(rand() % 60 - 30, 5.0f, rand() % 60 - 30, 1);
-        // 彩色光源
-        lights[i].color = vec4(0.3f + rand() % 7 * 0.1f,
-            0.3f + rand() % 7 * 0.1f,
-            0.3f + rand() % 7 * 0.1f, 1.0f);
+        lights[i].color = vec4(
+            0.2f + (rand() % 5) * 0.2f,
+            0.2f + (rand() % 5) * 0.2f,
+            0.2f + (rand() % 5) * 0.2f,
+            1.0f);
         lights[i].radius = 20.0f;
     }
 
+    // 光源 UBO
     GLuint lightUBO;
     glGenBuffers(1, &lightUBO);
     glBindBuffer(GL_UNIFORM_BUFFER, lightUBO);
-    glBufferData(GL_UNIFORM_BUFFER, 200 * sizeof(Light), lights.data(), GL_DYNAMIC_DRAW);
+    glBufferData(GL_UNIFORM_BUFFER, MAX_LIGHTS * sizeof(Light), lights.data(), GL_DYNAMIC_DRAW);
 
+    // 立方体 VAO
     GLuint VAO, VBO, EBO;
     glGenVertexArrays(1, &VAO);
     glGenBuffers(1, &VBO);
@@ -146,6 +142,7 @@ int main() {
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
 
+    // 加载 Shader
     string depth_vert = readFile("shaders/depth.vert");
     string depth_frag = readFile("shaders/depth.frag");
     string light_cull_comp = readFile("shaders/light_cull.comp");
@@ -163,6 +160,7 @@ int main() {
     GLuint ffs = createShader(GL_FRAGMENT_SHADER, forward_frag.c_str());
     GLuint forwardProg = createProgram({ fvs, ffs });
 
+    // 渲染循环
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
 
@@ -170,7 +168,9 @@ int main() {
         mat4 view = lookAt(vec3(18, 12, 18), vec3(0, 0, 0), vec3(0, 1, 0));
         mat4 pv = proj * view;
 
-        // 1. Depth Prepass
+        // ------------------------------
+        // 1. 深度预渲染
+        // ------------------------------
         glUseProgram(depthProg);
         glUniformMatrix4fv(glGetUniformLocation(depthProg, "uProjView"), 1, GL_FALSE, value_ptr(pv));
         glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
@@ -182,16 +182,36 @@ int main() {
             glDrawElements(GL_TRIANGLES, 36, GL_UNSIGNED_INT, 0);
         }
 
-        // 2. Compute Shader (无屏障，不崩溃)
+        // ------------------------------
+        // 2. 【真正 3D 空间光源剔除】
+        // ------------------------------
         glUseProgram(cullProg);
-        glUniform2i(glGetUniformLocation(cullProg, "uScreenSize"), winW, winH);
-        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, tileSSBO);
-        glDispatchCompute(tilesX, tilesY, 1); // 无 barrier！
 
-        // 3. Forward+
+        // 传递矩阵
+        glUniformMatrix4fv(glGetUniformLocation(cullProg, "uProj"), 1, GL_FALSE, value_ptr(proj));
+        glUniformMatrix4fv(glGetUniformLocation(cullProg, "uInvProj"), 1, GL_FALSE, value_ptr(inverse(proj)));
+        glUniform2i(glGetUniformLocation(cullProg, "uScreenSize"), winW, winH);
+        glUniform1i(glGetUniformLocation(cullProg, "uLightCount"), MAX_LIGHTS);
+
+        // 绑定深度图
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, depthTex);
+        glUniform1i(glGetUniformLocation(cullProg, "uDepth"), 0);
+
+        // 绑定 SSBO + UBO
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, tileSSBO);
+        glBindBufferBase(GL_UNIFORM_BUFFER, 1, lightUBO);
+
+        // 执行计算
+        glDispatchCompute(tilesX, tilesY, 1);
+
+        // ------------------------------
+        // 3. 最终渲染
+        // ------------------------------
         glUseProgram(forwardProg);
         glUniformMatrix4fv(glGetUniformLocation(forwardProg, "uProjView"), 1, GL_FALSE, value_ptr(pv));
         glUniform2i(glGetUniformLocation(forwardProg, "uScreenSize"), winW, winH);
+
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, tileSSBO);
         glBindBufferBase(GL_UNIFORM_BUFFER, 1, lightUBO);
 
