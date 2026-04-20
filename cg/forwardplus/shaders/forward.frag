@@ -26,25 +26,36 @@ layout(std430, binding = 0) readonly buffer TileBuffer {
 
 uniform ivec2 uScreenSize;
 
-void main() {
-    vec3 N = normalize(vec3(0.0, 1.0, 0.0));
-    vec3 color = vec3(0.1); // 基础环境光
+void main()
+{
+    // 基础漫反射颜色（物体本身颜色）
+    vec3 baseColor = vec3(0.9, 0.85, 0.8);
+    vec3 finalColor = baseColor * 0.1;
+
+    // 法线固定向上，简单效果
+    vec3 N = vec3(0.0, 1.0, 0.0);
 
     ivec2 tilePos = ivec2(gl_FragCoord.xy) / 16;
-    uint tileID = tilePos.x + tilePos.y * (uScreenSize.x / 16);
+    uint tileID = tilePos.y * (uScreenSize.x / 16) + tilePos.x;
     TileLightList list = lists[tileID];
 
-    for (int i = 0; i < list.count; i++) {
+    for (int i = 0; i < list.count; i++)
+    {
         int lid = list.indices[i];
         Light L = lights[lid];
 
         vec3 Lv = L.posWS.xyz - posWS;
         float dist = length(Lv);
-        if (dist > L.radius) continue;
 
-        float att = 1.0 - (dist / L.radius);
-        color += L.color.rgb * max(dot(N, normalize(Lv)), 0.0) * att * 0.5;
+        if (dist > L.radius)
+            continue;
+
+        float ndl = max(dot(normalize(Lv), N), 0.0);
+        float att = 1.0 - dist / L.radius;
+        att *= att;
+
+        finalColor += baseColor * L.color.rgb * ndl * att * 0.4;
     }
 
-    fragColor = vec4(color, 1.0);
+    fragColor = vec4(finalColor, 1.0);
 }

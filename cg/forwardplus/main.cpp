@@ -110,13 +110,22 @@ int main() {
     glBufferData(GL_SHADER_STORAGE_BUFFER, tilesX * tilesY * sizeof(TileLightList), nullptr, GL_DYNAMIC_DRAW);
 
     vector<Light> lights(200);
+    //for (int i = 0; i < 200; i++) {
+    //    // 放在立方体上方，高度 5
+    //    lights[i].posWS = vec4(rand() % 60 - 30, 5.0f, rand() % 60 - 30, 1);
+    //    // 纯白色强光
+    //    lights[i].color = vec4(2.0f, 2.0f, 2.0f, 1.0f);
+    //    // 超大照射范围
+    //    lights[i].radius = 30.0f;
+    //}
+
     for (int i = 0; i < 200; i++) {
-        // 放在立方体上方，高度 5
         lights[i].posWS = vec4(rand() % 60 - 30, 5.0f, rand() % 60 - 30, 1);
-        // 纯白色强光
-        lights[i].color = vec4(2.0f, 2.0f, 2.0f, 1.0f);
-        // 超大照射范围
-        lights[i].radius = 30.0f;
+        // 彩色光源
+        lights[i].color = vec4(0.3f + rand() % 7 * 0.1f,
+            0.3f + rand() % 7 * 0.1f,
+            0.3f + rand() % 7 * 0.1f, 1.0f);
+        lights[i].radius = 20.0f;
     }
 
     GLuint lightUBO;
