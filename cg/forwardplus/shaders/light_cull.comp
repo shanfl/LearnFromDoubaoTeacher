@@ -3,7 +3,6 @@ layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 const int TILE_SIZE = 16;
 const int MAX_LIGHTS = 200;
-const int MAX_LIGHTS_PER_TILE = 64;
 
 struct Light {
     vec4 posVS;
@@ -14,7 +13,7 @@ struct Light {
 
 struct TileLightList {
     int count;
-    int indices[MAX_LIGHTS_PER_TILE];
+    int indices[64];
 };
 
 layout(std140, binding = 1) uniform LightUBO {
@@ -26,18 +25,44 @@ layout(std430, binding = 0) buffer TileBuffer {
 };
 
 uniform ivec2 uScreenSize;
-uniform mat4 uInvProj;
+uniform mat4 uProj;
+uniform int  uLightCount;
+
+bool lightInTile(vec3 vsPos, float r, uint tx, uint ty)
+{
+    vec4 clip = uProj * vec4(vsPos, 1.0);
+    clip.xyz /= clip.w;
+
+    vec2 uv = clip.xy * 0.5 + 0.5;
+    vec2 px = uv * vec2(uScreenSize);
+
+    float projScale = (uProj[0][0] * r) / clip.w;
+    float pixR = abs(projScale) * uScreenSize.y;
+
+    vec2 tileMin = vec2(tx * TILE_SIZE, ty * TILE_SIZE);
+    vec2 tileMax = tileMin + TILE_SIZE;
+
+    vec2 closest = clamp(px, tileMin, tileMax);
+    float d2 = dot(closest - px, closest - px);
+
+    return d2 < pixR * pixR + 100.0;
+}
 
 void main() {
-    uint tileX = gl_WorkGroupID.x;
-    uint tileY = gl_WorkGroupID.y;
-    uint tileIdx = tileY * (uScreenSize.x / TILE_SIZE) + tileX;
+    uint tx = gl_WorkGroupID.x;
+    uint ty = gl_WorkGroupID.y;
+    uint idx = ty * (uScreenSize.x / TILE_SIZE) + tx;
 
     if (gl_LocalInvocationIndex != 0) return;
 
-    lists[tileIdx].count = 0;
-    for (int i = 0; i < 20; i++) {
-        lists[tileIdx].indices[i] = i;
-        lists[tileIdx].count++;
+    lists[idx].count = 0;
+
+    for (int i = 0; i < uLightCount; ++i) {
+        Light L = lights[i];
+        if (lightInTile(L.posVS.xyz, L.radius, tx, ty)) {
+            if (lists[idx].count < 64) {
+                lists[idx].indices[lists[idx].count++] = i;
+            }
+        }
     }
 }
